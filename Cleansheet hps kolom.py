@@ -1,5 +1,7 @@
+import pandas as pd
+
 # Baca file Excel
-file_path = "gambaran-umum-keadaan-sekolah-dasar-tiap-propinsi-indonesia-sd-2024.xlsx"
+file_path = r"gambaran-umum-keadaan-sekolah-dasar-tiap-propinsi-indonesia-sd-2024.xlsx"
 df = pd.read_excel(file_path, sheet_name="Sheet1")
 
 # ===============================
