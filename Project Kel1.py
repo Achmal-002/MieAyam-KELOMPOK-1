@@ -87,7 +87,7 @@ def clean_and_prepare_data(file_path):
     
     df = df[kolom_akhir]
     
-    print("✅ Pembersihan data selesai.")
+    print("Pembersihan data selesai & Penambahan Ratio Mengulang & Putus Sekolah.")
     print(f"Dimensi data: {df.shape}")
     print(f"Kolom: {df.columns.tolist()}")
     
