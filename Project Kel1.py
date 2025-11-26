@@ -1,7 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import FancyBboxPatch # Diperlukan untuk Slide 4
 
 # ==============================================================================
 # KONFIGURASI FILE
@@ -19,9 +18,7 @@ def clean_and_prepare_data(file_path):
     
     try:
         # Baca file Excel
-        # Asumsi header data sebenarnya berada di baris ke-X, 
-        # kita akan mencari 'Provinsi' untuk menentukan header yang benar.
-        df = pd.read_excel(file_path, sheet_name="Sheet1", header=None)
+        df = pd.read_excel(file_path, sheet_name="Sheet1")
     except FileNotFoundError:
         print(f"\n❌ ERROR: File input '{file_path}' tidak ditemukan.")
         print("Pastikan file Excel ada di folder yang sama dengan skrip ini.")
@@ -33,321 +30,329 @@ def clean_and_prepare_data(file_path):
     # Cari header yang benar (baris yang mengandung 'Provinsi')
     header_found = False
     for idx, row in df.iterrows():
-        # Asumsi kolom pertama (indeks 0) yang berisi 'Provinsi'
-        if isinstance(row[0], str) and 'Provinsi' in row[0]:
+        if 'Provinsi' in str(row[0]):
             df.columns = df.iloc[idx]
             df = df.iloc[idx+1:].reset_index(drop=True)
             header_found = True
             break
     
     if not header_found:
-        print("❌ ERROR: Header 'Provinsi' tidak ditemukan. Cek struktur file Excel Anda.")
+        print("❌ ERROR: Header 'Provinsi' tidak ditemukan.")
         return None
 
     # Rename kolom
-    # Catatan: Jumlah kolom harus sesuai dengan data yang Anda ambil setelah header
-    try:
-        df.columns = [
-            'Provinsi', 'Sekolah', 'Siswa', 'Mengulang', 'Putus Sekolah', 
-            'Kepala Sekolah & Guru', 'Tenaga Kependidikan', 'Rombel', 
-            'Ruang Kelas', 'Status'
-        ]
-    except ValueError:
-        print("❌ ERROR: Jumlah kolom yang terdeteksi tidak sesuai (harap periksa file Excel).")
-        print(f"Jumlah kolom yang terdeteksi: {len(df.columns)}")
-        return None
+    df.columns = [
+        'Provinsi', 'Sekolah', 'Siswa', 'Mengulang', 'Putus Sekolah', 
+        'Kepala Sekolah & Guru', 'Tenaga Kependidikan', 'Rombel', 
+        'Ruang Kelas', 'Status'
+    ]
 
     # Hapus kolom yang tidak diperlukan
     kolom_dihapus = ['Kepala Sekolah & Guru', 'Tenaga Kependidikan', 'Rombel', 'Ruang Kelas']
     df = df.drop(columns=kolom_dihapus, errors='ignore')
 
-    # Hapus baris metadata atau total (jika ada)
-    df = df[~df['Provinsi'].astype(str).str.contains('Tanggal cutoff|Sumber|Gambaran Umum|TOTAL', na=False)]
+    # Hapus baris metadata
+    df = df[~df['Provinsi'].str.contains('Tanggal cutoff|Sumber|Gambaran Umum', na=False)]
     df = df.dropna(subset=['Provinsi'])
 
     # Cleaning data
-    df['Provinsi'] = df['Provinsi'].astype(str).str.replace(r'Prov\.', '', regex=True).str.strip()
+    df['Provinsi'] = df['Provinsi'].str.replace(r'Prov\.', '', regex=True).str.strip()
     
     # Konversi kolom numerik
     numeric_cols = ['Sekolah', 'Siswa', 'Mengulang', 'Putus Sekolah']
     for col in numeric_cols:
-        # Konversi ke numerik, ganti nilai non-numerik dengan NaN, lalu isi NaN dengan 0
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-    # Hapus baris yang memiliki total siswa 0 untuk menghindari ZeroDivisionError pada ratio
-    df = df[df['Siswa'] > 0].copy()
 
-# ===============================
-    # TAMBAH KOLOM RATIO MENGULANG DAN PUTUS SEKOLAH
-    # ===============================
+    # Hitung rasio
+    df['Rasio Mengulang (%)'] = (df['Mengulang'] / df['Siswa'] * 100).round(3)
+    df['Rasio Putus Sekolah (%)'] = (df['Putus Sekolah'] / df['Siswa'] * 100).round(3)
     
-    # Hitung ratio mengulang dalam persen (Mengulang / Siswa * 100)
-    df['Ratio_Mengulang_Num'] = (df['Mengulang'] / df['Siswa'] * 100).round(2)
+    # Kategorikan berdasarkan rasio putus sekolah
+    conditions = [
+        df['Rasio Putus Sekolah (%)'] <= 0.1,
+        (df['Rasio Putus Sekolah (%)'] > 0.1) & (df['Rasio Putus Sekolah (%)'] <= 0.5),
+        df['Rasio Putus Sekolah (%)'] > 0.5
+    ]
+    choices = ['Rendah', 'Sedang', 'Tinggi']
+    df['Tingkat Putus Sekolah'] = np.select(conditions, choices, default='Tidak Terdefinisi')
     
-    # Hitung ratio putus sekolah dalam persen (Putus Sekolah / Siswa * 100)
-    df['Ratio_Putus_Num'] = (df['Putus Sekolah'] / df['Siswa'] * 100).round(2)
+    # Identifikasi status sekolah (Negeri vs Swasta)
+    df['Status Sekolah'] = df['Status'].apply(lambda x: 'Negeri' if 'Negeri' in str(x) else 'Swasta' if 'Swasta' in str(x) else 'Tidak Diketahui')
     
-    # Format sebagai string dengan simbol %
-    df['Ratio Mengulang (%)'] = df['Ratio_Mengulang_Num'].astype(str) + '%'
-    df['Ratio Putus Sekolah (%)'] = df['Ratio_Putus_Num'].astype(str) + '%'
-    
-    # Reorder kolom untuk menempatkan ratio mengulang di samping kolom mengulang
-    kolom_akhir = df.columns.tolist()
-    
-    # Pindahkan 'Ratio Mengulang (%)' ke setelah 'Mengulang'
-    if 'Mengulang' in kolom_akhir and 'Ratio Mengulang (%)' in kolom_akhir:
-        idx_mengulang = kolom_akhir.index('Mengulang')
-        kolom_akhir.insert(idx_mengulang + 1, kolom_akhir.pop(kolom_akhir.index('Ratio Mengulang (%)')))
-    
-    # Pindahkan 'Ratio Putus Sekolah (%)' ke setelah 'Putus Sekolah'
-    if 'Putus Sekolah' in kolom_akhir and 'Ratio Putus Sekolah (%)' in kolom_akhir:
-        idx_putus = kolom_akhir.index('Putus Sekolah')
-        kolom_akhir.insert(idx_putus + 1, kolom_akhir.pop(kolom_akhir.index('Ratio Putus Sekolah (%)')))
-    
-    df = df[kolom_akhir]
-    
-    print("Pembersihan data selesai & Penambahan Ratio Mengulang & Putus Sekolah.")
-    print(f"Dimensi data: {df.shape}")
-    print(f"Kolom: {df.columns.tolist()}")
-    
-    # Pastikan return df berada di dalam fungsi
+    print("✅ Data berhasil dibersihkan!")
     return df
 
-# ==============================================================================
-# FUNGSI VISUALISASI PER SLIDE
-# ==============================================================================
-
-def slide_1_distribusi_mengulang(df):
-    """Membuat slide 1: Distribusi Rasio Mengulang"""
-    fig, ax = plt.subplots(figsize=(10, 8))
+def create_pie_chart(df):
+    """Membuat pie chart untuk distribusi tingkat putus sekolah"""
+    print("📊 Membuat pie chart...")
     
-    # Kategorisasi data mengulang
-    mengulang_categories = {
-        'Rendah (<1%)': (df['Ratio_Mengulang_Num'] < 1).sum(),
-        'Sedang (1-3%)': ((df['Ratio_Mengulang_Num'] >= 1) & (df['Ratio_Mengulang_Num'] < 3)).sum(),
-        'Tinggi (≥3%)': (df['Ratio_Mengulang_Num'] >= 3).sum()
-    }
+    # Hitung jumlah provinsi per kategori
+    kategori_counts = df['Tingkat Putus Sekolah'].value_counts()
     
-    # Hapus kategori yang nilainya 0 untuk Pie Chart yang lebih bersih
-    mengulang_categories = {k: v for k, v in mengulang_categories.items() if v > 0}
-    
-    if not mengulang_categories:
-        print("Tidak ada data untuk Pie Chart Mengulang. Melanjutkan.")
-        return None
-        
-    colors = ['#90EE90', '#FFD700', '#FF6B6B']  # Hijau, Kuning, Merah
+    # Warna untuk setiap kategori
+    colors = ['#2ecc71', '#f39c12', '#e74c3c']  # Hijau, Orange, Merah
     
     # Buat pie chart
-    ax.pie(mengulang_categories.values(), 
-           labels=mengulang_categories.keys(),
-           autopct='%1.1f%%', 
-           colors=colors[:len(mengulang_categories)], # Sesuaikan warna dengan jumlah kategori
-           startangle=90)
+    plt.figure(figsize=(10, 8))
     
-    ax.set_title('SLIDE 1: 🍎 DISTRIBUSI RASIO MENGULANG\n(Jumlah Provinsi per Kategori)', 
-                 fontweight='bold', fontsize=16, pad=20)
+    # Plot pie chart dengan pengaturan yang lebih jelas
+    wedges, texts, autotexts = plt.pie(
+        kategori_counts.values, 
+        labels=kategori_counts.index,
+        colors=colors[:len(kategori_counts)],
+        autopct='%1.1f%%',
+        startangle=90,
+        textprops={'fontsize': 12, 'weight': 'bold'}
+    )
     
-    output_file = 'slide_1_distribusi_mengulang.png'
-    fig.savefig(output_file, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"✅ Slide 1 disimpan: {output_file}")
-    return output_file
+    # Perbaiki tampilan persentase
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_fontweight('bold')
+        autotext.set_fontsize(11)
+    
+    # Tambahkan judul
+    plt.title('DISTRIBUSI TINGKAT PUTUS SEKOLAH SD PER PROVINSI (2024)', 
+              fontsize=14, fontweight='bold', pad=20)
+    
+    # Tambahkan legenda
+    plt.legend(wedges, [f'{label}: {value} provinsi' 
+                       for label, value in kategori_counts.items()],
+              title="Kategori:",
+              loc="center left",
+              bbox_to_anchor=(1, 0, 0.5, 1))
+    
+    # Simpan gambar
+    plt.tight_layout()
+    plt.savefig('pie_chart_tingkat_putus_sekolah.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print("✅ Pie chart berhasil disimpan sebagai 'pie_chart_tingkat_putus_sekolah.png'")
 
-def slide_2_distribusi_putus_sekolah(df):
-    """Membuat slide 2: Distribusi Rasio Putus Sekolah"""
-    fig, ax = plt.subplots(figsize=(10, 8))
+def create_top10_visualizations(df):
+    """Membuat visualisasi Top 10 untuk Mengulang dan Putus Sekolah"""
+    print("📈 Membuat visualisasi Top 10...")
     
-    # Kategorisasi data putus sekolah
-    putus_categories = {
-        'Rendah (<0.5%)': (df['Ratio_Putus_Num'] < 0.5).sum(),
-        'Sedang (0.5-1%)': ((df['Ratio_Putus_Num'] >= 0.5) & (df['Ratio_Putus_Num'] < 1)).sum(),
-        'Tinggi (≥1%)': (df['Ratio_Putus_Num'] >= 1).sum()
+    # Filter data yang valid
+    df_valid = df[(df['Siswa'] > 0) & (df['Mengulang'] >= 0) & (df['Putus Sekolah'] >= 0)]
+    
+    # 1. Top 10 Siswa Mengulang Tertinggi
+    plt.figure(figsize=(14, 10))
+    
+    # Subplot 1: Top 10 Mengulang Tertinggi
+    plt.subplot(2, 2, 1)
+    top10_mengulang_tinggi = df_valid.nlargest(10, 'Mengulang')[['Provinsi', 'Mengulang', 'Rasio Mengulang (%)']]
+    bars = plt.barh(top10_mengulang_tinggi['Provinsi'], top10_mengulang_tinggi['Mengulang'], 
+                    color='#e74c3c', alpha=0.7)
+    plt.xlabel('Jumlah Siswa Mengulang')
+    plt.title('TOP 10 PROVINSI: SISWA MENGULANG TERTINGGI', fontweight='bold')
+    plt.gca().invert_yaxis()
+    
+    # Tambahkan nilai di bar
+    for bar, nilai in zip(bars, top10_mengulang_tinggi['Mengulang']):
+        plt.text(bar.get_width() + bar.get_width()*0.01, bar.get_y() + bar.get_height()/2, 
+                f'{int(nilai):,}', ha='left', va='center', fontweight='bold')
+    
+    # Subplot 2: Top 10 Mengulang Terendah
+    plt.subplot(2, 2, 2)
+    top10_mengulang_rendah = df_valid.nsmallest(10, 'Mengulang')[['Provinsi', 'Mengulang', 'Rasio Mengulang (%)']]
+    bars = plt.barh(top10_mengulang_rendah['Provinsi'], top10_mengulang_rendah['Mengulang'], 
+                    color='#2ecc71', alpha=0.7)
+    plt.xlabel('Jumlah Siswa Mengulang')
+    plt.title('TOP 10 PROVINSI: SISWA MENGULANG TERENDAH', fontweight='bold')
+    plt.gca().invert_yaxis()
+    
+    # Tambahkan nilai di bar
+    for bar, nilai in zip(bars, top10_mengulang_rendah['Mengulang']):
+        plt.text(bar.get_width() + bar.get_width()*0.01, bar.get_y() + bar.get_height()/2, 
+                f'{int(nilai):,}', ha='left', va='center', fontweight='bold')
+    
+    # Subplot 3: Top 10 Putus Sekolah Tertinggi
+    plt.subplot(2, 2, 3)
+    top10_putus_tinggi = df_valid.nlargest(10, 'Putus Sekolah')[['Provinsi', 'Putus Sekolah', 'Rasio Putus Sekolah (%)']]
+    bars = plt.barh(top10_putus_tinggi['Provinsi'], top10_putus_tinggi['Putus Sekolah'], 
+                    color='#c0392b', alpha=0.7)
+    plt.xlabel('Jumlah Siswa Putus Sekolah')
+    plt.title('TOP 10 PROVINSI: SISWA PUTUS SEKOLAH TERTINGGI', fontweight='bold')
+    plt.gca().invert_yaxis()
+    
+    # Tambahkan nilai di bar
+    for bar, nilai in zip(bars, top10_putus_tinggi['Putus Sekolah']):
+        plt.text(bar.get_width() + bar.get_width()*0.01, bar.get_y() + bar.get_height()/2, 
+                f'{int(nilai):,}', ha='left', va='center', fontweight='bold')
+    
+    # Subplot 4: Top 10 Putus Sekolah Terendah
+    plt.subplot(2, 2, 4)
+    top10_putus_rendah = df_valid.nsmallest(10, 'Putus Sekolah')[['Provinsi', 'Putus Sekolah', 'Rasio Putus Sekolah (%)']]
+    bars = plt.barh(top10_putus_rendah['Provinsi'], top10_putus_rendah['Putus Sekolah'], 
+                    color='#27ae60', alpha=0.7)
+    plt.xlabel('Jumlah Siswa Putus Sekolah')
+    plt.title('TOP 10 PROVINSI: SISWA PUTUS SEKOLAH TERENDAH', fontweight='bold')
+    plt.gca().invert_yaxis()
+    
+    # Tambahkan nilai di bar
+    for bar, nilai in zip(bars, top10_putus_rendah['Putus Sekolah']):
+        plt.text(bar.get_width() + bar.get_width()*0.01, bar.get_y() + bar.get_height()/2, 
+                f'{int(nilai):,}', ha='left', va='center', fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig('top10_analysis.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print("✅ Visualisasi Top 10 berhasil disimpan sebagai 'top10_analysis.png'")
+    
+    return {
+        'top10_mengulang_tinggi': top10_mengulang_tinggi,
+        'top10_mengulang_rendah': top10_mengulang_rendah,
+        'top10_putus_tinggi': top10_putus_tinggi,
+        'top10_putus_rendah': top10_putus_rendah
     }
-    
-    # Hapus kategori yang nilainya 0 untuk Pie Chart yang lebih bersih
-    putus_categories = {k: v for k, v in putus_categories.items() if v > 0}
-    
-    if not putus_categories:
-        print("Tidak ada data untuk Pie Chart Putus Sekolah. Melanjutkan.")
-        return None
 
-    colors = ['#87CEEB', '#FFA500', '#DC143C']  # Biru, Oranye, Merah
+def create_swasta_vs_negeri_comparison(df):
+    """Membuat visualisasi perbandingan Swasta vs Negeri"""
+    print("🏫 Membuat perbandingan Swasta vs Negeri...")
     
-    # Buat pie chart
-    ax.pie(putus_categories.values(), 
-           labels=putus_categories.keys(),
-           autopct='%1.1f%%', 
-           colors=colors[:len(putus_categories)], # Sesuaikan warna dengan jumlah kategori
-           startangle=90)
+    # Aggregasi data berdasarkan status sekolah
+    status_comparison = df.groupby('Status Sekolah').agg({
+        'Sekolah': 'sum',
+        'Siswa': 'sum',
+        'Mengulang': 'sum',
+        'Putus Sekolah': 'sum'
+    }).reset_index()
     
-    ax.set_title('SLIDE 2: 🎓 DISTRIBUSI RASIO PUTUS SEKOLAH\n(Jumlah Provinsi per Kategori)', 
-                 fontweight='bold', fontsize=16, pad=20)
+    # Hitung rasio
+    status_comparison['Rasio Mengulang (%)'] = (status_comparison['Mengulang'] / status_comparison['Siswa'] * 100).round(3)
+    status_comparison['Rasio Putus Sekolah (%)'] = (status_comparison['Putus Sekolah'] / status_comparison['Siswa'] * 100).round(3)
     
-    output_file = 'slide_2_distribusi_putus_sekolah.png'
-    fig.savefig(output_file, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"✅ Slide 2 disimpan: {output_file}")
-    return output_file
-
-def slide_3_perbandingan_status(df):
-    """Membuat slide 3: Perbandingan Negeri vs Swasta"""
+    # Visualisasi
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
     
-    # Pastikan kolom 'Status' hanya berisi 'Negeri' dan 'Swasta'
-    df_filtered = df[df['Status'].isin(['Negeri', 'Swasta'])].copy()
+    # Plot 1: Perbandingan Jumlah Sekolah
+    colors1 = ['#3498db', '#9b59b6', '#95a5a6']
+    ax1.bar(status_comparison['Status Sekolah'], status_comparison['Sekolah'], 
+            color=colors1[:len(status_comparison)], alpha=0.7)
+    ax1.set_title('JUMLAH SEKOLAH: SWASTA vs NEGERI', fontweight='bold')
+    ax1.set_ylabel('Jumlah Sekolah')
+    ax1.tick_params(axis='x', rotation=45)
     
-    if df_filtered.empty:
-        print("Tidak ada data yang valid untuk perbandingan Negeri vs Swasta. Melanjutkan.")
-        return None
-        
-    fig, ax = plt.subplots(figsize=(10, 8))
+    # Tambahkan nilai di bar
+    for i, v in enumerate(status_comparison['Sekolah']):
+        ax1.text(i, v + v*0.01, f'{int(v):,}', ha='center', va='bottom', fontweight='bold')
     
-    # Hitung rata-rata per status sekolah
-    status_avg = df_filtered.groupby('Status').agg({
-        'Ratio_Mengulang_Num': 'mean',
-        'Ratio_Putus_Num': 'mean'
-    }).round(2)
+    # Plot 2: Perbandingan Jumlah Siswa
+    colors2 = ['#2980b9', '#8e44ad', '#7f8c8d']
+    ax2.bar(status_comparison['Status Sekolah'], status_comparison['Siswa'], 
+            color=colors2[:len(status_comparison)], alpha=0.7)
+    ax2.set_title('JUMLAH SISWA: SWASTA vs NEGERI', fontweight='bold')
+    ax2.set_ylabel('Jumlah Siswa')
+    ax2.tick_params(axis='x', rotation=45)
     
-    # Setup untuk bar chart
-    status_list = status_avg.index.tolist()
-    x = np.arange(len(status_list))  # Posisi untuk Negeri dan Swasta
-    width = 0.35  # Lebar setiap bar
+    # Tambahkan nilai di bar
+    for i, v in enumerate(status_comparison['Siswa']):
+        ax2.text(i, v + v*0.01, f'{int(v):,}', ha='center', va='bottom', fontweight='bold')
     
-    # Buat bar untuk mengulang dan putus sekolah
-    bars_mengulang = ax.bar(x - width/2, status_avg['Ratio_Mengulang_Num'], 
-                            width, label='Mengulang (Rata-rata)', 
-                            color='#FF9E6D', alpha=0.9)
+    # Plot 3: Perbandingan Rasio Mengulang
+    colors3 = ['#e67e22', '#d35400', '#bdc3c7']
+    ax3.bar(status_comparison['Status Sekolah'], status_comparison['Rasio Mengulang (%)'], 
+            color=colors3[:len(status_comparison)], alpha=0.7)
+    ax3.set_title('RASIO MENGULANG: SWASTA vs NEGERI', fontweight='bold')
+    ax3.set_ylabel('Rasio Mengulang (%)')
+    ax3.tick_params(axis='x', rotation=45)
     
-    bars_putus = ax.bar(x + width/2, status_avg['Ratio_Putus_Num'], 
-                        width, label='Putus Sekolah (Rata-rata)', 
-                        color='#6DCFF6', alpha=0.9)
+    # Tambahkan nilai di bar
+    for i, v in enumerate(status_comparison['Rasio Mengulang (%)']):
+        ax3.text(i, v + 0.01, f'{v}%', ha='center', va='bottom', fontweight='bold')
     
-    # Atur judul dan label
-    ax.set_title('SLIDE 3: 🏫 PERBANDINGAN RATA-RATA RASIO PROVINSI\nNEGERI vs SWASTA', 
-                 fontweight='bold', pad=20, fontsize=16)
-    ax.set_xticks(x)
-    ax.set_xticklabels(status_list, fontsize=12, fontweight='bold')
-    ax.set_ylabel('Rata-rata Rasio (%)', fontsize=12)
-    ax.legend()
+    # Plot 4: Perbandingan Rasio Putus Sekolah
+    colors4 = ['#c0392b', '#a93226', '#a6acaf']
+    ax4.bar(status_comparison['Status Sekolah'], status_comparison['Rasio Putus Sekolah (%)'], 
+            color=colors4[:len(status_comparison)], alpha=0.7)
+    ax4.set_title('RASIO PUTUS SEKOLAH: SWASTA vs NEGERI', fontweight='bold')
+    ax4.set_ylabel('Rasio Putus Sekolah (%)')
+    ax4.tick_params(axis='x', rotation=45)
     
-    # Tambahkan nilai di atas setiap bar
-    for bars in [bars_mengulang, bars_putus]:
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height + 0.05, 
-                    f'{height:.2f}%', ha='center', va='bottom', 
-                    fontsize=10, fontweight='bold')
+    # Tambahkan nilai di bar
+    for i, v in enumerate(status_comparison['Rasio Putus Sekolah (%)']):
+        ax4.text(i, v + 0.001, f'{v}%', ha='center', va='bottom', fontweight='bold')
     
-    output_file = 'slide_3_perbandingan_status.png'
-    fig.savefig(output_file, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"✅ Slide 3 disimpan: {output_file}")
-    return output_file
-
-def slide_4_summary_statistics(df):
-    """Membuat slide 4: Ringkasan Statistik"""
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.axis('off')  # Sembunyikan axes
+    plt.tight_layout()
+    plt.savefig('swasta_vs_negeri_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
     
-    # Hitung statistik utama
-    total_sekolah = df['Sekolah'].sum()
-    total_siswa = df['Siswa'].sum()
-    avg_mengulang = df['Ratio_Mengulang_Num'].mean()
-    avg_putus = df['Ratio_Putus_Num'].mean()
+    print("✅ Perbandingan Swasta vs Negeri disimpan sebagai 'swasta_vs_negeri_comparison.png'")
     
-    # Cari performer terbaik/terburuk (yang rasio angkanya terendah dan tertinggi)
-    # Gunakan .idxmin() dan .idxmax()
-    prov_mengulang_terendah = df.loc[df['Ratio_Mengulang_Num'].idxmin(), 'Provinsi']
-    prov_mengulang_tertinggi = df.loc[df['Ratio_Mengulang_Num'].idxmax(), 'Provinsi']
-    
-    prov_putus_terendah = df.loc[df['Ratio_Putus_Num'].idxmin(), 'Provinsi']
-    prov_putus_tertinggi = df.loc[df['Ratio_Putus_Num'].idxmax(), 'Provinsi']
-    
-    
-    # Buat teks ringkasan
-    summary_text = f"""
-SLIDE 4: 📋 RINGKASAN STATISTIK UTAMA SD INDONESIA
---------------------------------------------------------
- 
-[Image of Elementary School Building]
-
-SEKOLAH & SISWA NASIONAL
-🏫 TOTAL SEKOLAH: {total_sekolah:,.0f}
-👨‍🎓 TOTAL SISWA: {total_siswa:,.0f}
- 
-RATA-RATA RASIO PROVINSI
-📊 Mengulang: {avg_mengulang:.2f}%
-📊 Putus Sekolah: {avg_putus:.2f}%
- 
-KINERJA PROVINSI (Mengulang / Putus Sekolah)
- 
-🏆 RASIO TERENDAH (TERBAIK)
- • Mengulang: {prov_mengulang_terendah}
- • Putus Sekolah: {prov_putus_terendah}
- 
-📉 RASIO TERTINGGI (TERBURUK)
- • Mengulang: {prov_mengulang_tertinggi}
- • Putus Sekolah: {prov_putus_tertinggi}
-
---------------------------------------------------------
-"""
-    
-    # Buat kotak dekorasi
-    from matplotlib.patches import FancyBboxPatch # Import lokal untuk memastikan ketersediaan
-    bbox = FancyBboxPatch((0.05, 0.05), 0.9, 0.9, 
-                          boxstyle="round,pad=0.02", 
-                          facecolor='#E0F7FA', alpha=0.8, 
-                          edgecolor='#00BCD4', linewidth=1.5)
-    ax.add_patch(bbox)
-    
-    # Tambahkan teks ke dalam kotak
-    ax.text(0.1, 0.95, summary_text, fontsize=12, fontfamily='monospace', 
-            verticalalignment='top', linespacing=2, fontweight='normal', color='#263238')
-    
-    output_file = 'slide_4_summary_statistics.png'
-    fig.savefig(output_file, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"✅ Slide 4 disimpan: {output_file}")
-    return output_file
-
-# ==============================================================================
-# MAIN EXECUTION
-# ==============================================================================
+    return status_comparison
 
 def main():
-    """Fungsi utama untuk menjalankan program dan membuat 4 slide."""
+    """Fungsi utama"""
+    # Bersihkan data
+    df_clean = clean_and_prepare_data(FILE_INPUT)
     
-    # 1. Bersihkan dan siapkan data
-    df = clean_and_prepare_data(FILE_INPUT)
-    
-    # 2. Jika data berhasil dibersihkan, buat visualisasi
-    if df is not None:
-        print("\n" + "="*50)
-        print("MEMBUAT 4 SLIDE VISUALISASI")
-        print("="*50)
-        
-        # Buat 4 slide visualisasi
-        slide_1_distribusi_mengulang(df)
-        slide_2_distribusi_putus_sekolah(df)
-        slide_3_perbandingan_status(df)
-        slide_4_summary_statistics(df)
-        
-        # 3. Simpan data bersih (tanpa kolom perhitungan internal)
-        df_to_save = df.drop(columns=['Ratio_Mengulang_Num', 'Ratio_Putus_Num'], errors='ignore')
-        df_to_save.to_excel(FILE_OUTPUT_CLEAN, index=False)
-        print(f"\n💾 Data clean disimpan: {FILE_OUTPUT_CLEAN}")
-        
-        # 4. Tampilkan pesan sukses
-        print("\n" + "="*50)
-        print("PROGRAM SELESAI! 4 SLIDE TELAH DIBUAT. 🎉")
-        print("="*50)
-        
+    if df_clean is not None:
         # Tampilkan preview data
-        print(f"\n📊 PREVIEW DATA BERSIH:")
-        print(df_to_save.head())
+        print("\n📋 Preview Data Hasil Cleaning:")
+        print(df_clean.head())
         
+        # Tampilkan statistik kategori
+        print("\n📊 Distribusi Tingkat Putus Sekolah:")
+        print(df_clean['Tingkat Putus Sekolah'].value_counts())
+        
+        # Buat pie chart
+        create_pie_chart(df_clean)
+        
+        # Buat visualisasi Top 10
+        top10_data = create_top10_visualizations(df_clean)
+        
+        # Buat perbandingan Swasta vs Negeri
+        status_data = create_swasta_vs_negeri_comparison(df_clean)
+        
+        # Simpan ke Excel
+        try:
+            # Buat worksheet dengan data lengkap
+            with pd.ExcelWriter(FILE_OUTPUT_CLEAN, engine='openpyxl') as writer:
+                # Sheet 1: Data lengkap
+                df_clean.to_excel(writer, sheet_name='Data Lengkap', index=False)
+                
+                # Sheet 2: Ringkasan per kategori
+                ringkasan = df_clean.groupby('Tingkat Putus Sekolah').agg({
+                    'Provinsi': 'count',
+                    'Rasio Putus Sekolah (%)': ['min', 'max', 'mean'],
+                    'Siswa': 'sum'
+                }).round(2)
+                ringkasan.columns = ['Jumlah Provinsi', 'Rasio Min (%)', 'Rasio Max (%)', 'Rasio Rata-rata (%)', 'Total Siswa']
+                ringkasan.to_excel(writer, sheet_name='Ringkasan Kategori')
+                
+                # Sheet 3: Data per kategori (Rendah, Sedang, Tinggi)
+                for kategori in ['Rendah', 'Sedang', 'Tinggi']:
+                    df_kategori = df_clean[df_clean['Tingkat Putus Sekolah'] == kategori]
+                    if not df_kategori.empty:
+                        df_kategori.to_excel(writer, sheet_name=f'Data {kategori}', index=False)
+                
+                # Sheet 4: Data Top 10
+                with pd.ExcelWriter('data_top10_analysis.xlsx', engine='openpyxl') as writer_top10:
+                    top10_data['top10_mengulang_tinggi'].to_excel(writer_top10, sheet_name='Top10 Mengulang Tinggi', index=False)
+                    top10_data['top10_mengulang_rendah'].to_excel(writer_top10, sheet_name='Top10 Mengulang Rendah', index=False)
+                    top10_data['top10_putus_tinggi'].to_excel(writer_top10, sheet_name='Top10 Putus Tinggi', index=False)
+                    top10_data['top10_putus_rendah'].to_excel(writer_top10, sheet_name='Top10 Putus Rendah', index=False)
+                    status_data.to_excel(writer_top10, sheet_name='Swasta vs Negeri', index=False)
+            
+            print(f"\n💾 Data berhasil disimpan ke: {FILE_OUTPUT_CLEAN}")
+            print("💾 Data Top 10 disimpan ke: data_top10_analysis.xlsx")
+            print("📁 File Excel berisi:")
+            print("   - Sheet 'Data Lengkap': Semua data provinsi")
+            print("   - Sheet 'Ringkasan Kategori': Statistik per kategori")
+            print("   - Sheet 'Data Rendah/Sedang/Tinggi': Data terpisah per kategori")
+            print("\n📊 Visualisasi yang dihasilkan:")
+            print("   - pie_chart_tingkat_putus_sekolah.png")
+            print("   - top10_analysis.png")
+            print("   - swasta_vs_negeri_comparison.png")
+            
+        except Exception as e:
+            print(f"❌ Error saat menyimpan file Excel: {e}")
+    
     else:
-        print("\n❌ Program dihentikan karena ada error dalam pembersihan data.")
+        print("❌ Gagal memproses data.")
 
-# Jalankan program (Sintaks diperbaiki: __name__ == "__main__")
+# Jalankan program
 if __name__ == "__main__":
     main()
